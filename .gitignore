@@ -1,21 +1,17 @@
-@"
-# Build output
+# .NET build files
 bin/
 obj/
+[Bb]in/
+[Oo]bj/
 
 # Visual Studio
 .vs/
 *.user
 *.suo
 
-# Environment and secrets
-.env
-appsettings.Development.json
-
 # Logs
 *.log
 
-# Publish output
-publish/
-artifacts/
-"@ | Set-Content -Path .gitignore
+# Secrets
+.env
+appsettings.Development.json
