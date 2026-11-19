@@ -1,0 +1,21 @@
+@"
+# Build output
+bin/
+obj/
+
+# Visual Studio
+.vs/
+*.user
+*.suo
+
+# Environment and secrets
+.env
+appsettings.Development.json
+
+# Logs
+*.log
+
+# Publish output
+publish/
+artifacts/
+"@ | Set-Content -Path .gitignore
