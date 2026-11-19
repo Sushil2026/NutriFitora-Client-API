@@ -8,16 +8,58 @@ using NutriApi;
 var b = WebApplication.CreateBuilder(args);
 b.Configuration.AddJsonFile("appsettings.Local.json", optional: true);   // local secrets, not committed to Git
 b.Services.AddDbContext<AppDb>(o => o.UseNpgsql(b.Configuration.GetConnectionString("Default")));
-var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(b.Configuration["Jwt:Key"]!));
+var jwtSecret = b.Configuration["Jwt:Key"];
+if (string.IsNullOrWhiteSpace(jwtSecret) || Encoding.UTF8.GetByteCount(jwtSecret) < 32)
+    throw new InvalidOperationException("Configure Jwt:Key with a secret of at least 32 UTF-8 bytes.");
+var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(jwtSecret));
 b.Services.AddAuthentication("Bearer").AddJwtBearer(o =>
     o.TokenValidationParameters = new() { IssuerSigningKey = key, ValidateIssuer = false, ValidateAudience = false });
 b.Services.AddAuthorization();
-var origins = (b.Configuration["Cors:Origins"] ?? "")
+// CORS: support comma-separated Render Cors__Origins and indexed Cors__AllowedOrigins__0.
+// Origins must be scheme + host + optional port, without a trailing slash.
+var commaSeparatedOrigins = (b.Configuration["Cors:Origins"] ?? "")
     .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+var indexedOrigins = b.Configuration.GetSection("Cors:AllowedOrigins").GetChildren()
+    .Select(child => child.Value)
+    .Where(value => !string.IsNullOrWhiteSpace(value))
+    .Select(value => value!);
+var allowedOrigins = commaSeparatedOrigins
+    .Concat(indexedOrigins)
+    .Concat(new[] { "http://localhost:8081", "http://localhost:19006" })
+    .Select(origin => origin.Trim().TrimEnd('/'))
+    .Where(origin => Uri.TryCreate(origin, UriKind.Absolute, out var uri)
+                     && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps)
+                     && uri.AbsolutePath == "/" && string.IsNullOrEmpty(uri.Query)
+                     && string.IsNullOrEmpty(uri.Fragment))
+    .Distinct(StringComparer.OrdinalIgnoreCase)
+    .ToArray();
 
-b.Services.AddCors(o => o.AddPolicy("web", p =>
-    p.WithOrigins(origins).AllowAnyHeader().AllowAnyMethod()));var app = b.Build();
-app.UseCors("web"); app.UseAuthentication(); app.UseAuthorization();
+b.Services.AddCors(options => options.AddPolicy("web", policy =>
+    policy.WithOrigins(allowedOrigins).AllowAnyHeader().AllowAnyMethod()));
+
+var app = b.Build();
+// CORS runs after routing and before authentication/authorization.
+app.UseRouting();
+app.UseCors("web");
+app.UseAuthentication();
+app.UseAuthorization();
+
+app.MapGet("/", () => Results.Ok(new { message = "NutriFitora API is running", status = "Online" }));
+app.MapGet("/health", () => Results.Ok(new { status = "Healthy" }));
+// Safe deployment diagnostic: confirms the running API and configured origin match.
+// Does not expose JWT keys, database connection strings, or passwords.
+app.MapGet("/cors-check", (HttpContext context) =>
+{
+    var origin = context.Request.Headers.Origin.ToString();
+    return Results.Ok(new
+    {
+        service = "NutriFitora NutriApi",
+        corsPolicy = "web",
+        requestOrigin = origin,
+        originAllowed = allowedOrigins.Contains(origin, StringComparer.OrdinalIgnoreCase),
+        expectedLocalOrigin = "http://localhost:8081"
+    });
+});
 
 // ---- migrate + seed first admin
 using (var s = app.Services.CreateScope())
@@ -26,8 +68,12 @@ using (var s = app.Services.CreateScope())
     db.Database.Migrate();
     if (!db.Users.Any(u => u.Role == "Admin"))
     {
-        db.Users.Add(new AppUser { Email = "admin@nutri.com", FullName = "Administrator", Role = "Admin", PasswordHash = BCrypt.Net.BCrypt.HashPassword("Admin@123") });
-        db.SaveChanges();
+        var adminPassword = b.Configuration["SeedAdmin:Password"];
+        if (!string.IsNullOrWhiteSpace(adminPassword))
+        {
+            db.Users.Add(new AppUser { Email = "admin@nutri.com", FullName = "Administrator", Role = "Admin", PasswordHash = BCrypt.Net.BCrypt.HashPassword(adminPassword) });
+            db.SaveChanges();
+        }
     }
     if (!db.Services.Any() && !db.Plans.Any())   // starter content for the home page (edit in Admin)
     {
