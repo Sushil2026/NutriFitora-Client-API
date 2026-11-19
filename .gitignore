@@ -1,17 +1,5 @@
-# .NET build files
-bin/
-obj/
-[Bb]in/
-[Oo]bj/
-
-# Visual Studio
+**/bin/
+**/obj/
 .vs/
-*.user
-*.suo
-
-# Logs
-*.log
-
-# Secrets
 .env
-appsettings.Development.json
+.env.*
