@@ -3,7 +3,11 @@
     <TargetFramework>net10.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
+<<<<<<< HEAD
     <UserSecretsId>0fc64874-312f-45c1-b729-7ba7d9a2d243</UserSecretsId>
+=======
+    <UserSecretsId>eddfd058-c2cc-431b-8f2d-15eb29ebad73</UserSecretsId>
+>>>>>>> origin/main
   </PropertyGroup>
   <ItemGroup>
     <PackageReference Include="Npgsql" Version="10.0.0" />

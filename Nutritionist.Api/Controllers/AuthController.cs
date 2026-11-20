@@ -124,6 +124,7 @@ public sealed class AuthController : ControllerBase
     }
 }
 
+<<<<<<< HEAD
 
 public sealed record RegisterRequest(
     [Required]
@@ -152,5 +153,26 @@ public sealed record LoginRequest(
     string Email,
 
     [param: Required]
+=======
+public sealed record RegisterRequest(
+    [Required, StringLength(120, MinimumLength = 2)]
+    string FullName,
+
+    [Required, EmailAddress, StringLength(254)]
+    string Email,
+
+    [Required, MinLength(8), StringLength(128)]
+    string Password,
+
+    [Phone, StringLength(25)]
+    string? PhoneNumber
+);
+
+public sealed record LoginRequest(
+    [Required, EmailAddress]
+    string Email,
+
+    [Required]
+>>>>>>> origin/main
     string Password
 );

@@ -1,6 +1,16 @@
 bin/
 obj/
+<<<<<<< HEAD
 .vs/
 .git/
 .env
 .env.*
+=======
+.git/
+.vs/
+.vscode/
+.env
+.env.*
+**/bin/
+**/obj/
+>>>>>>> origin/main
