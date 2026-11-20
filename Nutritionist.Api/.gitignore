@@ -1,7 +1,8 @@
+# .NET build output
 **/bin/
 **/obj/
+
+# Visual Studio
 .vs/
-.vscode/
-.env
-.env.*
-**/appsettings.Development.json
+*.user
+*.suo
