@@ -38,19 +38,18 @@ builder.Services.AddScoped<
 
 // CORS
 builder.Services.AddCors(options =>
-    options.AddPolicy("Frontend", policy =>
+{
+    options.AddPolicy("NutriFitoraCors", policy =>
+    {
         policy.WithOrigins(
-            builder.Configuration
-                .GetSection("Cors:AllowedOrigins")
-                .Get<string[]>()
-            ?? new[]
-            {
                 "http://localhost:8081",
-                "http://localhost:19006"
-            })
-        .AllowAnyHeader()
-        .AllowAnyMethod()));
-
+                "http://localhost:19006",
+                "http://localhost:3000"
+            )
+            .AllowAnyHeader()
+            .AllowAnyMethod();
+    });
+});
 // JWT authentication
 var key = new SymmetricSecurityKey(
     Encoding.UTF8.GetBytes(jwtKey));
@@ -89,11 +88,10 @@ app.UseSwaggerUI();
 
 // Middleware
 app.UseHttpsRedirection();
-app.UseCors("Frontend");
+app.UseRouting();
+app.UseCors("NutriFitoraCors");
 app.UseAuthentication();
 app.UseAuthorization();
-
-// API controllers
 app.MapControllers();
 
 // API homepage
