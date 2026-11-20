@@ -1,16 +1,11 @@
-bin/
-obj/
-<<<<<<< HEAD
-.vs/
-.git/
-.env
-.env.*
-=======
-.git/
-.vs/
-.vscode/
-.env
-.env.*
+
 **/bin/
 **/obj/
->>>>>>> origin/main
+**/.vs/
+**/.vscode/
+**/.git/
+**/.gitignore
+**/node_modules/
+**/.env
+**/.env.*
+**/appsettings.Development.json
