@@ -19,43 +19,60 @@ builder.Services.AddSwaggerGen();
 // 2. Neon PostgreSQL configuration
 // =====================================================
 
-var connectionString =
-    builder.Configuration.GetConnectionString("Neon")
+// Read database settings from environment variables.
+// Render uses Neon__Host, Neon__Database,
+// Neon__Username and Neon__Password.
+
+var neonHost = builder.Configuration["Neon:Host"]
     ?? throw new InvalidOperationException(
-        "Missing ConnectionStrings:Neon configuration.");
+        "Missing Neon:Host configuration.");
 
-NpgsqlConnectionStringBuilder neonConnectionBuilder;
+var neonDatabase = builder.Configuration["Neon:Database"]
+    ?? throw new InvalidOperationException(
+        "Missing Neon:Database configuration.");
 
-try
-{
-    neonConnectionBuilder =
-        new NpgsqlConnectionStringBuilder(connectionString);
+var neonUsername = builder.Configuration["Neon:Username"]
+    ?? throw new InvalidOperationException(
+        "Missing Neon:Username configuration.");
 
-    if (string.IsNullOrWhiteSpace(neonConnectionBuilder.Host) ||
-        string.IsNullOrWhiteSpace(neonConnectionBuilder.Database) ||
-        string.IsNullOrWhiteSpace(neonConnectionBuilder.Username) ||
-        string.IsNullOrWhiteSpace(neonConnectionBuilder.Password))
-    {
-        throw new InvalidOperationException(
-            "Neon connection string must include Host, " +
-            "Database, Username and Password.");
-    }
+var neonPassword = builder.Configuration["Neon:Password"]
+    ?? throw new InvalidOperationException(
+        "Missing Neon:Password configuration.");
 
-    Console.WriteLine(
-        "Neon connection string format validated.");
-}
-catch (ArgumentException)
+if (string.IsNullOrWhiteSpace(neonHost) ||
+    string.IsNullOrWhiteSpace(neonDatabase) ||
+    string.IsNullOrWhiteSpace(neonUsername) ||
+    string.IsNullOrWhiteSpace(neonPassword))
 {
     throw new InvalidOperationException(
-        "Invalid ConnectionStrings:Neon format. " +
-        "Check the Render environment variable. " +
-        "Do not include surrounding quotation marks.");
+        "Neon database configuration cannot be empty.");
 }
 
-// Register Npgsql without Entity Framework
+// Build connection string safely.
+// This handles special characters in the password.
+
+var neonConnectionBuilder =
+    new NpgsqlConnectionStringBuilder
+    {
+        Host = neonHost,
+        Port = 5432,
+        Database = neonDatabase,
+        Username = neonUsername,
+        Password = neonPassword,
+        SslMode = SslMode.VerifyFull,
+        Pooling = true,
+        Timeout = 15,
+        CommandTimeout = 30
+    };
+
+// Register Npgsql without Entity Framework.
+
 builder.Services.AddSingleton<NpgsqlDataSource>(_ =>
     NpgsqlDataSource.Create(
         neonConnectionBuilder.ConnectionString));
+
+Console.WriteLine(
+    "Neon PostgreSQL configuration initialized.");
 
 // =====================================================
 // 3. Password hashing
@@ -200,7 +217,7 @@ if (!app.Environment.IsDevelopment())
 // =====================================================
 
 // Swagger is enabled for development and deployment.
-// Consider restricting it before public production use.
+// Restrict it before public production use if needed.
 
 app.UseSwagger();
 app.UseSwaggerUI();
@@ -209,8 +226,7 @@ app.UseSwaggerUI();
 // 9. Middleware
 // =====================================================
 
-// Render terminates HTTPS at its reverse proxy.
-// Do not redirect internal HTTP traffic here.
+// Render handles public HTTPS at its reverse proxy.
 
 app.UseRouting();
 
