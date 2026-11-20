@@ -60,23 +60,23 @@ builder.Services
     .AddJwtBearer(options =>
         options.TokenValidationParameters =
             new TokenValidationParameters
-            {
-                ValidateIssuer = true,
-                ValidIssuer =
-                    builder.Configuration["Jwt:Issuer"]
-                    ?? "Nutritionist.Api",
+{
+    ValidateIssuer = true,
+    ValidIssuer =
+        builder.Configuration["Jwt:Issuer"]
+        ?? "Nutritionist.Api",
 
-                ValidateAudience = true,
-                ValidAudience =
-                    builder.Configuration["Jwt:Audience"]
-                    ?? "Nutritionist.Pwa",
+    ValidateAudience = true,
+    ValidAudience =
+        builder.Configuration["Jwt:Audience"]
+        ?? "Nutritionist.Pwa",
 
-                ValidateIssuerSigningKey = true,
-                IssuerSigningKey = key,
+    ValidateIssuerSigningKey = true,
+    IssuerSigningKey = key,
 
-                ValidateLifetime = true,
-                ClockSkew = TimeSpan.FromSeconds(30)
-            });
+    ValidateLifetime = true,
+    ClockSkew = TimeSpan.FromSeconds(30)
+});
 
 builder.Services.AddAuthorization();
 
