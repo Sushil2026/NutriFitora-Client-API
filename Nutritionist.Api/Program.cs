@@ -1,3 +1,4 @@
+
 using System.Text;
 using Microsoft.AspNetCore.Authentication.JwtBearer;
 using Microsoft.AspNetCore.Identity;
@@ -6,95 +7,225 @@ using Npgsql;
 
 var builder = WebApplication.CreateBuilder(args);
 
-// Controllers and Swagger
+// =====================================================
+// 1. Controllers and Swagger
+// =====================================================
+
 builder.Services.AddControllers();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen();
 
-// Neon PostgreSQL
-var cs = builder.Configuration.GetConnectionString("Neon")
-    ?? throw new InvalidOperationException(
-        "Configure ConnectionStrings:Neon.");
+// =====================================================
+// 2. Neon PostgreSQL configuration
+// =====================================================
 
-// JWT configuration
-var jwtKey = builder.Configuration["Jwt:Key"]
+var connectionString =
+    builder.Configuration.GetConnectionString("Neon")
     ?? throw new InvalidOperationException(
-        "Configure Jwt:Key.");
+        "Missing ConnectionStrings:Neon configuration.");
 
-if (Encoding.UTF8.GetByteCount(jwtKey) < 32)
+NpgsqlConnectionStringBuilder neonConnectionBuilder;
+
+try
+{
+    neonConnectionBuilder =
+        new NpgsqlConnectionStringBuilder(connectionString);
+
+    if (string.IsNullOrWhiteSpace(neonConnectionBuilder.Host) ||
+        string.IsNullOrWhiteSpace(neonConnectionBuilder.Database) ||
+        string.IsNullOrWhiteSpace(neonConnectionBuilder.Username) ||
+        string.IsNullOrWhiteSpace(neonConnectionBuilder.Password))
+    {
+        throw new InvalidOperationException(
+            "Neon connection string must include Host, " +
+            "Database, Username and Password.");
+    }
+
+    Console.WriteLine(
+        "Neon connection string format validated.");
+}
+catch (ArgumentException)
 {
     throw new InvalidOperationException(
-        "Jwt:Key must be at least 32 bytes.");
+        "Invalid ConnectionStrings:Neon format. " +
+        "Check the Render environment variable. " +
+        "Do not include surrounding quotation marks.");
 }
 
-// Database connection
-builder.Services.AddSingleton(_ =>
-    NpgsqlDataSource.Create(cs));
+// Register Npgsql without Entity Framework
+builder.Services.AddSingleton<NpgsqlDataSource>(_ =>
+    NpgsqlDataSource.Create(
+        neonConnectionBuilder.ConnectionString));
 
-// Password hashing
+// =====================================================
+// 3. Password hashing
+// =====================================================
+
 builder.Services.AddScoped<
     IPasswordHasher<object>,
     PasswordHasher<object>>();
 
-// CORS
+// =====================================================
+// 4. CORS configuration
+// =====================================================
+
+var configuredOrigins =
+    builder.Configuration["Cors:AllowedOrigins"];
+
+var allowedOrigins = new List<string>
+{
+    "http://localhost:8081",
+    "http://localhost:19006",
+    "http://localhost:3000",
+    "http://127.0.0.1:8081"
+};
+
+if (!string.IsNullOrWhiteSpace(configuredOrigins))
+{
+    allowedOrigins.AddRange(
+        configuredOrigins.Split(
+            ',',
+            StringSplitOptions.RemoveEmptyEntries |
+            StringSplitOptions.TrimEntries));
+}
+
 builder.Services.AddCors(options =>
 {
     options.AddPolicy("NutriFitoraCors", policy =>
     {
         policy.WithOrigins(
-                "http://localhost:8081",
-                "http://localhost:19006",
-                "http://localhost:3000"
-            )
+                allowedOrigins
+                    .Select(origin => origin.TrimEnd('/'))
+                    .Distinct(StringComparer.OrdinalIgnoreCase)
+                    .ToArray())
             .AllowAnyHeader()
             .AllowAnyMethod();
     });
 });
-// JWT authentication
-var key = new SymmetricSecurityKey(
+
+// =====================================================
+// 5. JWT configuration
+// =====================================================
+
+var jwtKey = builder.Configuration["Jwt:Key"]
+    ?? throw new InvalidOperationException(
+        "Missing Jwt:Key configuration.");
+
+if (Encoding.UTF8.GetByteCount(jwtKey) < 32)
+{
+    throw new InvalidOperationException(
+        "Jwt:Key must contain at least 32 UTF-8 bytes.");
+}
+
+var jwtIssuer =
+    builder.Configuration["Jwt:Issuer"]
+    ?? "Nutritionist.Api";
+
+var jwtAudience =
+    builder.Configuration["Jwt:Audience"]
+    ?? "Nutritionist.Pwa";
+
+var signingKey = new SymmetricSecurityKey(
     Encoding.UTF8.GetBytes(jwtKey));
 
 builder.Services
     .AddAuthentication(
         JwtBearerDefaults.AuthenticationScheme)
     .AddJwtBearer(options =>
+    {
         options.TokenValidationParameters =
             new TokenValidationParameters
-{
-    ValidateIssuer = true,
-    ValidIssuer =
-        builder.Configuration["Jwt:Issuer"]
-        ?? "Nutritionist.Api",
+            {
+                ValidateIssuer = true,
+                ValidIssuer = jwtIssuer,
 
-    ValidateAudience = true,
-    ValidAudience =
-        builder.Configuration["Jwt:Audience"]
-        ?? "Nutritionist.Pwa",
+                ValidateAudience = true,
+                ValidAudience = jwtAudience,
 
-    ValidateIssuerSigningKey = true,
-    IssuerSigningKey = key,
+                ValidateIssuerSigningKey = true,
+                IssuerSigningKey = signingKey,
 
-    ValidateLifetime = true,
-    ClockSkew = TimeSpan.FromSeconds(30)
-});
+                ValidateLifetime = true,
+                RequireExpirationTime = true,
+                ClockSkew = TimeSpan.FromSeconds(30)
+            };
+    });
 
 builder.Services.AddAuthorization();
 
+// =====================================================
+// 6. Build application
+// =====================================================
+
 var app = builder.Build();
 
-// Swagger
+// =====================================================
+// 7. Exception handling
+// =====================================================
+
+if (!app.Environment.IsDevelopment())
+{
+    app.UseExceptionHandler(errorApp =>
+    {
+        errorApp.Run(async context =>
+        {
+            var exception = context.Features.Get<
+                Microsoft.AspNetCore.Diagnostics
+                    .IExceptionHandlerFeature>()?.Error;
+
+            var logger = context.RequestServices
+                .GetRequiredService<ILogger<Program>>();
+
+            if (exception != null)
+            {
+                logger.LogError(
+                    exception,
+                    "Unhandled exception on {Path}",
+                    context.Request.Path);
+            }
+
+            context.Response.StatusCode = 500;
+
+            await context.Response.WriteAsJsonAsync(
+                new
+                {
+                    message = "Internal server error."
+                });
+        });
+    });
+}
+
+// =====================================================
+// 8. Swagger
+// =====================================================
+
+// Swagger is enabled for development and deployment.
+// Consider restricting it before public production use.
+
 app.UseSwagger();
 app.UseSwaggerUI();
 
-// Middleware
-app.UseHttpsRedirection();
+// =====================================================
+// 9. Middleware
+// =====================================================
+
+// Render terminates HTTPS at its reverse proxy.
+// Do not redirect internal HTTP traffic here.
+
 app.UseRouting();
+
 app.UseCors("NutriFitoraCors");
+
 app.UseAuthentication();
+
 app.UseAuthorization();
+
 app.MapControllers();
 
-// API homepage
+// =====================================================
+// 10. API homepage
+// =====================================================
+
 app.MapGet("/", () => Results.Ok(new
 {
     message = "NutriFitora API is running successfully",
@@ -102,11 +233,19 @@ app.MapGet("/", () => Results.Ok(new
     version = "1.0"
 }));
 
-// Health endpoint
+// =====================================================
+// 11. Health endpoint
+// =====================================================
+
 app.MapGet("/health", () => Results.Ok(new
 {
     status = "Healthy",
-    service = "NutriFitora API"
+    service = "NutriFitora API",
+    environment = app.Environment.EnvironmentName
 }));
+
+// =====================================================
+// 12. Start application
+// =====================================================
 
 app.Run();
