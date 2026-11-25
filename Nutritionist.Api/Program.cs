@@ -205,6 +205,11 @@ app.UseCors("NutriFitoraCors"); // Must run before authentication/authorization.
 app.UseAuthentication();
 app.UseAuthorization();
 app.MapControllers();
+app.MapGet("/api/version", () => new
+{
+    version = "nutritionist-dashboard-v1",
+    application = "Nutritionist.Api"
+});
 
 // =====================================================
 // 10. API homepage
