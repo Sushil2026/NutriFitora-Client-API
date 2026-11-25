@@ -1,4 +1,8 @@
 using System.ComponentModel.DataAnnotations;
+<<<<<<< HEAD
+=======
+using Microsoft.AspNetCore.Authorization;
+>>>>>>> e1f3924 (Update NutriFitora Client API)
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
 using System.Text;
@@ -22,6 +26,18 @@ public sealed class AuthController : ControllerBase
         _db = db; _hasher = hasher; _config = config;
     }
 
+<<<<<<< HEAD
+=======
+    [Authorize]
+    [HttpGet("me")]
+    public IActionResult Me() => Ok(new {
+        userId = User.FindFirst(JwtRegisteredClaimNames.Sub)?.Value ?? User.FindFirst(ClaimTypes.NameIdentifier)?.Value,
+        fullName = User.FindFirst(ClaimTypes.Name)?.Value,
+        email = User.FindFirst(JwtRegisteredClaimNames.Email)?.Value ?? User.FindFirst(ClaimTypes.Email)?.Value,
+        roles = User.FindAll(ClaimTypes.Role).Select(c => c.Value).ToArray()
+    });
+
+>>>>>>> e1f3924 (Update NutriFitora Client API)
     [HttpPost("register")]
     public async Task<IActionResult> Register(RegisterRequest request, CancellationToken ct)
     {
@@ -98,6 +114,21 @@ public sealed class AuthController : ControllerBase
         if (!active || verified == PasswordVerificationResult.Failed)
             return Unauthorized(new { message = "Invalid email or password." });
 
+<<<<<<< HEAD
+=======
+        // Optional staff portal restriction. The server, not the UI, enforces roles.
+        var portal = request.Portal?.Trim().ToLowerInvariant();
+        var requiredRole = portal switch {
+            "admin" => "Administrator",
+            "nutritionist" => "Nutritionist",
+            null or "" or "customer" => "Customer",
+            _ => null
+        };
+        if (requiredRole == null) return BadRequest(new { message = "Invalid portal." });
+        if (!roles.Contains(requiredRole, StringComparer.Ordinal))
+            return StatusCode(403, new { message = "This account cannot access the selected portal." });
+
+>>>>>>> e1f3924 (Update NutriFitora Client API)
         var token = CreateToken(id, email, name, roles);
         return Ok(new {
             accessToken = token, tokenType = "Bearer", expiresIn = 1800,
@@ -147,6 +178,7 @@ public sealed record RegisterRequest(
 
 
 public sealed record LoginRequest(
+<<<<<<< HEAD
     [param: Required]
     [param: EmailAddress]
     string Email,
@@ -154,3 +186,8 @@ public sealed record LoginRequest(
     [param: Required]
     string Password
 );
+=======
+    [Required, EmailAddress] string Email,
+    [Required] string Password,
+    string? Portal = null);
+>>>>>>> e1f3924 (Update NutriFitora Client API)
