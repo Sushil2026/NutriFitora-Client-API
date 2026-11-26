@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Security.Cryptography;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using System.IdentityModel.Tokens.Jwt;
@@ -135,11 +136,67 @@ public sealed class AuthController : ControllerBase
         if (!roles.Contains(requiredRole, StringComparer.Ordinal))
             return StatusCode(403, new { message = "This account cannot access the selected portal." });
 
+        if (requiredRole == "Customer")
+        {
+            await reader.DisposeAsync();
+            await conn.DisposeAsync();
+            var result = await CustomerOtp.Send(_db, _config, id, email, null, ct);
+            if (result.Challenge is null) return StatusCode(429, new { message = result.Error });
+            return Ok(new { otpRequired = true, challengeId = result.Challenge, expiresIn = 300, resendAfter = 60 });
+        }
+        // Staff tokens cannot be used as customer tokens to bypass customer OTP.
+        roles = roles.Where(r => r != "Customer").ToArray();
         var token = CreateToken(id, email, name, roles);
         return Ok(new {
             accessToken = token, tokenType = "Bearer", expiresIn = 1800,
             user = new { userId = id, fullName = name, email, roles }
         });
+    }
+
+    [HttpPost("otp/resend")]
+    public async Task<IActionResult> Resend(OtpResendRequest request, CancellationToken ct)
+    {
+        await using var conn = await _db.OpenConnectionAsync(ct);
+        await using var cmd = new NpgsqlCommand("""
+            SELECT u.user_id,u.email FROM customer_login_otp o JOIN users u ON u.user_id=o.user_id
+            WHERE o.challenge_id=@c AND NOT o.consumed AND o.expires_at>now() AND u.is_active
+            AND EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=u.user_id AND r.role_name='Customer')
+            """, conn);
+        cmd.Parameters.AddWithValue("c", request.ChallengeId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return BadRequest(new { message = "Please sign in again." });
+        var id = reader.GetGuid(0); var email = reader.GetString(1);
+        await reader.DisposeAsync();
+            await conn.DisposeAsync();
+        var result = await CustomerOtp.Send(_db, _config, id, email, request.ChallengeId, ct);
+        if (result.Challenge is null) return StatusCode(429, new { message = result.Error });
+        return Ok(new { otpRequired = true, challengeId = result.Challenge, expiresIn = 300, resendAfter = 60 });
+    }
+
+    [HttpPost("otp/verify")]
+    public async Task<IActionResult> VerifyOtp(OtpVerifyRequest request, CancellationToken ct)
+    {
+        if (!Regex.IsMatch(request.Code ?? "", @"\A[0-9]{6}\z")) return BadRequest(new { message = "Enter six digits." });
+        await using var conn = await _db.OpenConnectionAsync(ct);
+        await using var tx = await conn.BeginTransactionAsync(ct);
+        await using var cmd = new NpgsqlCommand("""
+            SELECT o.user_id,o.code_hash,u.full_name,u.email FROM customer_login_otp o JOIN users u ON u.user_id=o.user_id
+            WHERE o.challenge_id=@c AND NOT o.consumed AND o.expires_at>now() AND o.attempts<5 AND u.is_active
+            AND EXISTS(SELECT 1 FROM user_roles ur JOIN roles r ON r.role_id=ur.role_id WHERE ur.user_id=u.user_id AND r.role_name='Customer')
+            FOR UPDATE OF o
+            """, conn, tx);
+        cmd.Parameters.AddWithValue("c", request.ChallengeId);
+        await using var reader = await cmd.ExecuteReaderAsync(ct);
+        if (!await reader.ReadAsync(ct)) return Unauthorized(new { message = "Code expired or attempts exhausted. Sign in again." });
+        var id = reader.GetGuid(0); var hash = reader.GetFieldValue<byte[]>(1); var name = reader.GetString(2); var email = reader.GetString(3);
+        await reader.DisposeAsync();
+        var valid = CryptographicOperations.FixedTimeEquals(hash, CustomerOtp.Hash(_config, request.ChallengeId, request.Code!));
+        await using var update = new NpgsqlCommand("UPDATE customer_login_otp SET attempts=attempts+1, consumed=@valid WHERE challenge_id=@c", conn, tx);
+        update.Parameters.AddWithValue("valid", valid); update.Parameters.AddWithValue("c", request.ChallengeId);
+        await update.ExecuteNonQueryAsync(ct); await tx.CommitAsync(ct);
+        if (!valid) return Unauthorized(new { message = "Incorrect verification code." });
+        string[] roles = ["Customer"];
+        return Ok(new { accessToken = CreateToken(id,email,name,roles), tokenType = "Bearer", expiresIn = 1800, user = new { userId=id, fullName=name,email,roles } });
     }
 
     private string CreateToken(Guid id, string email, string name, string[] roles)
@@ -188,3 +245,6 @@ public sealed record LoginRequest(
     [Required, EmailAddress] string Email,
     [Required] string Password,
     string? Portal = null);
+
+public sealed record OtpResendRequest(Guid ChallengeId);
+public sealed record OtpVerifyRequest(Guid ChallengeId, string Code);
