@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Authorization;
 using System.IdentityModel.Tokens.Jwt;
 using System.Security.Claims;
@@ -35,7 +36,21 @@ public sealed class AuthController : ControllerBase
     [HttpPost("register")]
     public async Task<IActionResult> Register(RegisterRequest request, CancellationToken ct)
     {
-        var email = request.Email.Trim().ToLowerInvariant();
+        var name = request.FullName?.Trim() ?? "";
+        var email = request.Email?.Trim().ToLowerInvariant() ?? "";
+        var phone = request.PhoneNumber?.Trim() ?? "";
+        var password = request.Password ?? "";
+        if (name.Length < 2 || name.Length > 100)
+            return BadRequest(new { message = "Enter a full name of 2–100 characters." });
+        if (email.Length > 254 || !new EmailAddressAttribute().IsValid(email) || !Regex.IsMatch(email, @"^[^\s@]+@[^\s@]+\.[^\s@]+$"))
+            return BadRequest(new { message = "Enter a valid email address." });
+        if (!Regex.IsMatch(phone, @"\A(?:\+91)?[6-9][0-9]{9}\z"))
+            return BadRequest(new { message = "Enter a valid 10-digit Indian mobile number." });
+        if (!phone.StartsWith("+91")) phone = "+91" + phone;
+        if (password.Length < 12 || password.Length > 128 || !Regex.IsMatch(password, "[A-Z]") || !Regex.IsMatch(password, "[a-z]") || !Regex.IsMatch(password, "[0-9]") || !Regex.IsMatch(password, @"[^\p{L}\p{N}\s]"))
+            return BadRequest(new { message = "Password must contain 12–128 characters, uppercase, lowercase, number and special character." });
+        if (!request.AcceptedPrivacy)
+            return BadRequest(new { message = "Please accept the Privacy Policy." });
         await using var conn = await _db.OpenConnectionAsync(ct);
         await using var tx = await conn.BeginTransactionAsync(ct);
 
@@ -51,7 +66,7 @@ public sealed class AuthController : ControllerBase
             cmd.Parameters.AddWithValue("name", request.FullName.Trim());
             cmd.Parameters.AddWithValue("email", email);
             cmd.Parameters.AddWithValue("hash", hash);
-            cmd.Parameters.AddWithValue("phone", (object?)request.PhoneNumber ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("phone", phone);
             id = (Guid)(await cmd.ExecuteScalarAsync(ct)
                 ?? throw new InvalidOperationException("User insert failed."));
         }
@@ -149,7 +164,7 @@ public sealed class AuthController : ControllerBase
 
 public sealed record RegisterRequest(
     [Required]
-    [StringLength(120, MinimumLength = 2)]
+    [StringLength(100, MinimumLength = 2)]
     string FullName,
 
     [Required]
@@ -158,13 +173,14 @@ public sealed record RegisterRequest(
     string Email,
 
     [Required]
-    [MinLength(8)]
+    [MinLength(12)]
     [StringLength(128)]
     string Password,
 
-    [Phone]
-    [StringLength(25)]
-    string? PhoneNumber
+    [Required]
+    [StringLength(13)]
+    string? PhoneNumber,
+    bool AcceptedPrivacy = false
 );
 
 
