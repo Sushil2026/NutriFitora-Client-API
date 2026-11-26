@@ -8,6 +8,7 @@ namespace Nutritionist.Api.Controllers;
 [ApiController]
 [Route("api/nutritionist/overview")]
 [Authorize(Roles = "Nutritionist")]
+[ResponseCache(NoStore = true, Location = ResponseCacheLocation.None)]
 public sealed class NutritionistOverviewController(NpgsqlDataSource db) : ControllerBase
 {
     [HttpGet]
