@@ -20,7 +20,7 @@ public sealed class AdminFoundationController(NpgsqlDataSource db, IPasswordHash
             (SELECT count(*) FROM admin_events WHERE is_active AND starts_at>now()) AS upcoming_events
             """,
             "customers"=>"SELECT u.user_id AS id,u.full_name AS name,u.email,u.is_active AS active FROM users u WHERE EXISTS(SELECT 1 FROM user_roles ur JOIN roles r USING(role_id) WHERE ur.user_id=u.user_id AND r.role_name='Customer') ORDER BY u.full_name",
-            "nutritionists"=>"SELECT u.user_id AS id,u.full_name AS name,u.email,u.is_active AS active,p.professional_title AS title,p.specialization,p.bio FROM users u LEFT JOIN nutritionist_profiles p USING(user_id) WHERE EXISTS(SELECT 1 FROM user_roles ur JOIN roles r USING(role_id) WHERE ur.user_id=u.user_id AND r.role_name='Nutritionist') ORDER BY u.full_name",
+            "nutritionists"=>"SELECT u.user_id AS id,u.full_name AS name,u.email,u.is_active AS active,p.professional_title AS title,p.specialization,p.bio,u.phone_number AS phone,u.email_verified AS verified,u.created_at AS created,u.updated_at AS updated, EXISTS(SELECT 1 FROM user_roles ur JOIN roles r USING(role_id) WHERE ur.user_id=u.user_id AND r.role_name='Administrator') AS protected FROM users u LEFT JOIN nutritionist_profiles p USING(user_id) WHERE EXISTS(SELECT 1 FROM user_roles ur JOIN roles r USING(role_id) WHERE ur.user_id=u.user_id AND r.role_name='Nutritionist') ORDER BY u.full_name",
             "plans"=>"SELECT program_code AS id,program_name AS name,duration_weeks AS weeks,price_inr AS price,description,is_active AS active,is_purchasable AS purchasable FROM nutrition_programs ORDER BY display_order",
             "goals"=>"SELECT id,name,unit,description,is_active AS active FROM admin_goal_templates ORDER BY name",
             "events"=>"SELECT id,title AS name,description,starts_at AS start,ends_at AS end,is_active AS active FROM admin_events ORDER BY starts_at",
@@ -41,6 +41,24 @@ public sealed class AdminFoundationController(NpgsqlDataSource db, IPasswordHash
         """,conn,tx);
         var id=Guid.NewGuid();cmd.Parameters.AddWithValue("id",id);cmd.Parameters.AddWithValue("name",p.Name.Trim());cmd.Parameters.AddWithValue("email",p.Email.Trim().ToLowerInvariant());cmd.Parameters.AddWithValue("hash",hasher.HashPassword(new object(),p.Password));cmd.Parameters.AddWithValue("title",p.Title??"");cmd.Parameters.AddWithValue("specialization",p.Specialization??"");cmd.Parameters.AddWithValue("bio",p.Bio??"");
         try{await cmd.ExecuteNonQueryAsync(ct);await tx.CommitAsync(ct);}catch(PostgresException e) when(e.SqlState=="23505"){return Conflict(new{message="Account already exists."});}return Ok(new{id});
+    }
+    public record NutritionistUpdate(string Name,string Email,string? Phone,string? Title,string? Specialization,string? Bio,bool Active);
+    [HttpPut("nutritionists/{id:guid}")]
+    public async Task<IActionResult> UpdateNutritionist(Guid id,NutritionistUpdate p,CancellationToken ct){
+        if(string.IsNullOrWhiteSpace(p.Name)||p.Name.Trim().Length>100||string.IsNullOrWhiteSpace(p.Email)||p.Email.Trim().Length>254||!new System.ComponentModel.DataAnnotations.EmailAddressAttribute().IsValid(p.Email.Trim())||(p.Phone?.Length??0)>30||(p.Title?.Length??0)>150||(p.Specialization?.Length??0)>200||(p.Bio?.Length??0)>4000)return BadRequest(new{message="Invalid profile details."});
+        await using var conn=await db.OpenConnectionAsync(ct);await using var tx=await conn.BeginTransactionAsync(ct);
+        try{
+            await using var user=new NpgsqlCommand("""
+            UPDATE users SET full_name=@name,email=@email,phone_number=@phone,is_active=@active,email_verified=CASE WHEN email=@email THEN email_verified ELSE false END,updated_at=now()
+            WHERE user_id=@id AND EXISTS(SELECT 1 FROM user_roles ur JOIN roles r USING(role_id) WHERE ur.user_id=@id AND r.role_name='Nutritionist') AND NOT EXISTS(SELECT 1 FROM user_roles ur JOIN roles r USING(role_id) WHERE ur.user_id=@id AND r.role_name='Administrator')
+            """,conn,tx);
+            user.Parameters.AddWithValue("id",id);user.Parameters.AddWithValue("name",p.Name.Trim());user.Parameters.AddWithValue("email",p.Email.Trim().ToLowerInvariant());user.Parameters.Add("phone",NpgsqlDbType.Text).Value=string.IsNullOrWhiteSpace(p.Phone)?DBNull.Value:(object)p.Phone.Trim();user.Parameters.AddWithValue("active",p.Active);
+            if(await user.ExecuteNonQueryAsync(ct)!=1)return NotFound(new{message="Nutritionist not found or protected account."});
+            await using var profile=new NpgsqlCommand("""
+            INSERT INTO nutritionist_profiles(user_id,professional_title,specialization,bio,created_at) VALUES(@id,@title,@specialization,@bio,now()) ON CONFLICT(user_id) DO UPDATE SET professional_title=excluded.professional_title,specialization=excluded.specialization,bio=excluded.bio
+            """,conn,tx);
+            profile.Parameters.AddWithValue("id",id);profile.Parameters.AddWithValue("title",p.Title?.Trim()??"");profile.Parameters.AddWithValue("specialization",p.Specialization?.Trim()??"");profile.Parameters.AddWithValue("bio",p.Bio?.Trim()??"");await profile.ExecuteNonQueryAsync(ct);await tx.CommitAsync(ct);return Ok();
+        }catch(PostgresException e) when(e.SqlState=="23505"){return Conflict(new{message="Email or account already exists."});}
     }
     public record Activation(bool Active);
     [HttpPatch("nutritionists/{id:guid}")]
