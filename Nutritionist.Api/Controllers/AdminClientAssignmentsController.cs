@@ -17,25 +17,45 @@ public sealed class AdminClientAssignmentsController(NpgsqlDataSource db) : Cont
     public async Task<IActionResult> Get(CancellationToken ct)
     {
         await using var cmd = db.CreateCommand("""
-            SELECT u.user_id,u.full_name,r.role_name FROM users u
+            SELECT u.user_id,u.full_name,r.role_name,u.is_active FROM users u
             JOIN user_roles ur USING(user_id) JOIN roles r USING(role_id)
-            WHERE u.is_active AND r.role_name IN ('Customer','Nutritionist') ORDER BY u.full_name;
+            WHERE r.role_name='Customer' OR (u.is_active AND r.role_name='Nutritionist') ORDER BY u.full_name;
             SELECT program_code,program_name,duration_weeks FROM nutrition_programs
             WHERE is_active AND duration_weeks>0 ORDER BY display_order;
             SELECT a.assignment_id,c.full_name,n.full_name,a.program_name,
             CASE WHEN a.expires_at<=now() THEN 'expired' ELSE a.status END,
-            a.assigned_at,a.expires_at FROM nutritionist_clients a
+            a.assigned_at,a.expires_at,a.client_id,a.nutritionist_id FROM nutritionist_clients a
             JOIN users c ON c.user_id=a.client_id JOIN users n ON n.user_id=a.nutritionist_id
             ORDER BY a.assigned_at DESC;
             """);
         await using var r = await cmd.ExecuteReaderAsync(ct);
         var customers=new List<object>(); var nutritionists=new List<object>();
-        while(await r.ReadAsync(ct)) (r.GetString(2)=="Customer"?customers:nutritionists).Add(new {id=r.GetGuid(0),name=r.GetString(1)});
+        while(await r.ReadAsync(ct)) (r.GetString(2)=="Customer"?customers:nutritionists).Add(new {id=r.GetGuid(0),name=r.GetString(1),active=r.GetBoolean(3)});
         await r.NextResultAsync(ct); var programs=new List<object>();
         while(await r.ReadAsync(ct)) programs.Add(new {code=r.GetString(0),name=r.GetString(1),weeks=r.GetInt32(2)});
         await r.NextResultAsync(ct); var assignments=new List<object>();
-        while(await r.ReadAsync(ct)) assignments.Add(new {id=r.GetGuid(0),client=r.GetString(1),nutritionist=r.GetString(2),program=r.GetString(3),status=r.GetString(4),assignedAt=r.GetDateTime(5),expiresAt=r.IsDBNull(6)?(DateTime?)null:r.GetDateTime(6)});
+        while(await r.ReadAsync(ct)) assignments.Add(new {id=r.GetGuid(0),client=r.GetString(1),nutritionist=r.GetString(2),program=r.GetString(3),status=r.GetString(4),clientId=r.GetGuid(7),nutritionistId=r.GetGuid(8),assignedAt=r.GetDateTime(5),expiresAt=r.IsDBNull(6)?(DateTime?)null:r.GetDateTime(6)});
         return Ok(new {customers,nutritionists,programs,assignments});
+    }
+
+    [HttpGet("customers/{id:guid}")]
+    public async Task<IActionResult> Customer(Guid id,CancellationToken ct)
+    {
+        await using var cmd=db.CreateCommand("""
+            SELECT u.user_id AS id,u.full_name AS name,u.email,u.phone_number AS phone,
+            u.created_at AS "registeredAt",u.is_active AS active,u.email_verified AS verified,
+            p.date_of_birth::text AS dob,p.height_cm AS height,p.current_weight_kg AS weight,
+            p.target_weight_kg AS target,p.dietary_preference AS diet,p.activity_level AS activity
+            FROM users u LEFT JOIN customer_profiles p USING(user_id)
+            WHERE u.user_id=@id AND EXISTS(SELECT 1 FROM user_roles ur JOIN roles r USING(role_id)
+            WHERE ur.user_id=u.user_id AND r.role_name='Customer');
+            """);
+        cmd.Parameters.AddWithValue("id",id);
+        await using var reader=await cmd.ExecuteReaderAsync(ct);
+        if(!await reader.ReadAsync(ct))return NotFound();
+        var row=new Dictionary<string,object?>();
+        for(int i=0;i<reader.FieldCount;i++)row[reader.GetName(i)]=reader.IsDBNull(i)?null:reader.GetValue(i);
+        return Ok(row);
     }
 
     [HttpPost]
