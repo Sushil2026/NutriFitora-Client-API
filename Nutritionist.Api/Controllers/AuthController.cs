@@ -153,7 +153,7 @@ public sealed class AuthController : ControllerBase
         roles = [requiredRole];
         var token = CreateToken(id, email, name, roles);
         return Ok(new {
-            accessToken = token, tokenType = "Bearer", expiresIn = 1800,
+            otpRequired = false, accessToken = token, tokenType = "Bearer", expiresIn = 1800,
             user = new { userId = id, fullName = name, email, roles }
         });
     }
@@ -201,7 +201,7 @@ public sealed class AuthController : ControllerBase
         await update.ExecuteNonQueryAsync(ct); await tx.CommitAsync(ct);
         if (!valid) return Unauthorized(new { message = "Incorrect verification code." });
         string[] roles = [role];
-        return Ok(new { accessToken = CreateToken(id,email,name,roles), tokenType = "Bearer", expiresIn = 1800, user = new { userId=id, fullName=name,email,roles } });
+        return Ok(new { otpRequired = false, accessToken = CreateToken(id,email,name,roles), tokenType = "Bearer", expiresIn = 1800, user = new { userId=id, fullName=name,email,roles } });
     }
 
     private string CreateToken(Guid id, string email, string name, string[] roles)
