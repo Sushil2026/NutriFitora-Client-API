@@ -38,11 +38,35 @@ public sealed class CareChatController(NpgsqlDataSource db) : ControllerBase
         CASE WHEN @customer THEN (SELECT professional_title FROM nutritionist_profiles WHERE user_id=n.user_id LIMIT 1) END,
         CASE WHEN @customer THEN (SELECT specialization FROM nutritionist_profiles WHERE user_id=n.user_id LIMIT 1) END,
         CASE WHEN @customer THEN (SELECT bio FROM nutritionist_profiles WHERE user_id=n.user_id LIMIT 1) END,
+        CASE WHEN NOT (CASE WHEN @customer THEN n.is_active ELSE c.is_active END) THEN 'inactive'
+        WHEN pr.last_seen IS NULL OR pr.last_seen < now()-interval '90 seconds' THEN 'offline'
+        WHEN pr.last_active < now()-interval '5 minutes' THEN 'away' ELSE 'online' END,
+        pr.last_seen,
+        (SELECT max(message_id)::text FROM chat_messages WHERE assignment_id=a.assignment_id AND sender_id<>@actor),
         (
-        """+Writable+") "+Scope+" ORDER BY a.assigned_at DESC");
+        """+Writable+") "+Scope.Replace("WHERE ((@customer", "LEFT JOIN chat_presence pr ON pr.user_id=CASE WHEN @customer THEN n.user_id ELSE c.user_id END WHERE ((@customer")+" ORDER BY a.assigned_at DESC");
       await using var r=await cmd.ExecuteReaderAsync(ct);var rows=new List<object>();
-      while(await r.ReadAsync(ct))rows.Add(new {id=r.GetGuid(0),name=r.GetString(1),program=r.GetString(2),status=r.GetString(3),assignedAt=r.GetDateTime(4),expiresAt=r.IsDBNull(5)?(DateTime?)null:r.GetDateTime(5),unread=r.GetInt64(6),title=r.IsDBNull(7)?null:r.GetString(7),specialization=r.IsDBNull(8)?null:r.GetString(8),bio=r.IsDBNull(9)?null:r.GetString(9),canSend=r.GetBoolean(10)});
+      while(await r.ReadAsync(ct))rows.Add(new {id=r.GetGuid(0),name=r.GetString(1),program=r.GetString(2),status=r.GetString(3),assignedAt=r.GetDateTime(4),expiresAt=r.IsDBNull(5)?(DateTime?)null:r.GetDateTime(5),unread=r.GetInt64(6),title=r.IsDBNull(7)?null:r.GetString(7),specialization=r.IsDBNull(8)?null:r.GetString(8),bio=r.IsDBNull(9)?null:r.GetString(9),presence=r.GetString(10),lastSeen=r.IsDBNull(11)?(DateTime?)null:r.GetDateTime(11),latestIncoming=r.IsDBNull(12)?null:r.GetString(12),canSend=r.GetBoolean(13)});
       return Ok(rows);
+    }
+    public sealed record HeartbeatRequest(bool Active);
+    [HttpPost("presence")]
+    public async Task<IActionResult> Heartbeat(HeartbeatRequest request,CancellationToken ct){
+      if(Actor==Guid.Empty)return Unauthorized();
+      await using var cmd=Command("""
+        INSERT INTO chat_presence(user_id,last_seen,last_active)
+        SELECT u.user_id,now(),CASE WHEN @active THEN now() ELSE now()-interval '5 minutes' END
+        FROM users u WHERE u.user_id=@actor AND u.is_active AND EXISTS(SELECT 1 FROM user_roles ur JOIN roles r USING(role_id) WHERE ur.user_id=u.user_id AND r.role_name=CASE WHEN @customer THEN 'Customer' ELSE 'Nutritionist' END)
+        ON CONFLICT(user_id) DO UPDATE SET last_seen=now(),last_active=CASE WHEN @active THEN now() ELSE chat_presence.last_active END;
+        """);
+      cmd.Parameters.AddWithValue("active",request.Active);
+      return await cmd.ExecuteNonQueryAsync(ct)>0?NoContent():Forbid();
+    }
+    [HttpPost("{id:guid}/typing")]
+    public async Task<IActionResult> Typing(Guid id,CancellationToken ct){
+      if(Actor==Guid.Empty)return Unauthorized();
+      await using var cmd=Command("INSERT INTO chat_typing(assignment_id,user_id,expires_at) SELECT a.assignment_id,@actor,now()+interval '8 seconds' "+Scope+" AND a.assignment_id=@assignment AND "+Writable+" ON CONFLICT(assignment_id,user_id) DO UPDATE SET expires_at=EXCLUDED.expires_at",id);
+      await cmd.ExecuteNonQueryAsync(ct);return NoContent();
     }
     [HttpGet("unread-count")]
     public async Task<IActionResult> Unread(CancellationToken ct){
@@ -53,12 +77,12 @@ public sealed class CareChatController(NpgsqlDataSource db) : ControllerBase
     [HttpGet("{id:guid}/messages")]
     public async Task<IActionResult> Messages(Guid id,long? before,CancellationToken ct){
       if(Actor==Guid.Empty)return Unauthorized();if(before is <=0)return BadRequest();
-      await using var cmd=Command("SELECT a.assignment_id, ("+Writable+"), m.message_id,m.body,m.sent_at,m.read_at,m.sender_id=@actor "+Scope.Replace("WHERE ((@customer"," LEFT JOIN LATERAL (SELECT * FROM chat_messages WHERE assignment_id=a.assignment_id AND message_id<@before ORDER BY message_id DESC LIMIT 51) m ON true WHERE ((@customer")+" AND a.assignment_id=@assignment ORDER BY m.message_id DESC",id);
+      await using var cmd=Command("SELECT a.assignment_id, ("+Writable+"), m.message_id,m.body,m.sent_at,m.read_at,m.sender_id=@actor, EXISTS(SELECT 1 FROM chat_typing t WHERE t.assignment_id=a.assignment_id AND t.user_id<>@actor AND t.expires_at>now()) "+Scope.Replace("WHERE ((@customer"," LEFT JOIN LATERAL (SELECT * FROM chat_messages WHERE assignment_id=a.assignment_id AND message_id<@before ORDER BY message_id DESC LIMIT 51) m ON true WHERE ((@customer")+" AND a.assignment_id=@assignment ORDER BY m.message_id DESC",id);
       cmd.Parameters.AddWithValue("before",before??long.MaxValue);
       await using var r=await cmd.ExecuteReaderAsync(ct);if(!await r.ReadAsync(ct))return NotFound();
-      var canSend=r.GetBoolean(1);var rows=new List<object>();
+      var canSend=r.GetBoolean(1);var typing=r.GetBoolean(7);var rows=new List<object>();
       do {if(!r.IsDBNull(2))rows.Add(new {id=r.GetInt64(2).ToString(),body=r.GetString(3),sentAt=r.GetDateTime(4),readAt=r.IsDBNull(5)?(DateTime?)null:r.GetDateTime(5),mine=r.GetBoolean(6)});}while(await r.ReadAsync(ct));
-      return Ok(new {canSend,hasMore=rows.Count>50,items=rows.Take(50).Reverse()});
+      return Ok(new {canSend,typing,hasMore=rows.Count>50,items=rows.Take(50).Reverse()});
     }
     public sealed record SendRequest(string Body,Guid ClientKey);
     [HttpPost("{id:guid}/messages")]
