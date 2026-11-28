@@ -59,12 +59,12 @@ public sealed class AuthController : ControllerBase
             INSERT INTO users(full_name,email,password_hash,phone_number)
             VALUES(@name,@email,@hash,@phone) RETURNING user_id;
             """;
-        var hash = _hasher.HashPassword(new object(), request.Password);
+        var hash = _hasher.HashPassword(new object(), password);
         Guid id;
         try
         {
             await using var cmd = new NpgsqlCommand(sql, conn, tx);
-            cmd.Parameters.AddWithValue("name", request.FullName.Trim());
+            cmd.Parameters.AddWithValue("name", name);
             cmd.Parameters.AddWithValue("email", email);
             cmd.Parameters.AddWithValue("hash", hash);
             cmd.Parameters.AddWithValue("phone", phone);
